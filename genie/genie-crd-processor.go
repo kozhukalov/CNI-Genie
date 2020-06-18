@@ -25,7 +25,7 @@ import (
 	"os"
 	//"os/exec"
 	//"strings"
-	"github.com/Huawei-PaaS/CNI-Genie/utils"
+	"github.com/cni-genie/CNI-Genie/utils"
 	"strconv"
 	"strings"
 )
