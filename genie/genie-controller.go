@@ -379,12 +379,15 @@ func parseCNIAnnotations(annot map[string]string, client *kubernetes.Clientset, 
 		}
 	} else if strings.TrimSpace(annot["cni"]) != "" {
 		cniAnnots := strings.Split(annot["cni"], ",")
-		for _, pluginName := range cniAnnots {
-			pluginInfo.PluginName = pluginName
+		for _, pluginDef := range cniAnnots {
+			items := strings.Split(pluginDef, ":")
+			if len(items) == 2 {
+				pluginInfo.Vlan = items[1]
+			}
+			pluginInfo.PluginName = items[0]
 			finalPluginInfos = append(finalPluginInfos, pluginInfo)
 			pluginInfo = utils.PluginInfo{}
 		}
-
 		fmt.Fprintf(os.Stderr, "CNI Genie finalPluginInfos= %v\n", finalPluginInfos)
 	} else if networksAnnot := ParsePodAnnotationsForNetworks(client, k8sArgs); networksAnnot != "" {
 		fmt.Fprintf(os.Stderr, "CNI Genie networks annotation passed\n")
@@ -641,7 +644,11 @@ func addNetwork(intfName string, pluginInfo utils.PluginInfo, cniArgs utils.CNIA
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "CNI Genie Error while unsetting env variable CNI_IFNAME: %v\n", err)
 	}
-	rtConf, err := runtimeConf(cniArgs, intfName)
+	err = os.Unsetenv("CNI_ARGS")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "CNI Genie Error while unsetting env variable CNI_ARGS: %v\n", err)
+	}
+	rtConf, err := runtimeConf(cniArgs, intfName, pluginInfo)
 	if err != nil {
 		return nil, fmt.Errorf("CNI Genie couldn't convert cniArgs to RuntimeConf: %v\n", err)
 	}
@@ -683,7 +690,7 @@ func deleteNetwork(intfName string, cniName string, cniArgs utils.CNIArgs) error
 
 			conf = confFromFile
 			fmt.Fprintf(os.Stderr, "CNI Genie cni type= %s\n", conf.Plugins[0].Network.Type)
-			rtConf, err := runtimeConf(cniArgs, intfName)
+			rtConf, err := runtimeConf(cniArgs, intfName, utils.PluginInfo{})
 			if err != nil {
 				return fmt.Errorf("CNI Genie couldn't convert cniArgs to RuntimeConf: %v\n", err)
 			}
@@ -730,7 +737,7 @@ func getK8sPodAnnotations(client *kubernetes.Clientset, k8sArgs utils.K8sArgs) (
 	return pod.Annotations, nil
 }
 
-func runtimeConf(cniArgs utils.CNIArgs, iface string) (*libcni.RuntimeConf, error) {
+func runtimeConf(cniArgs utils.CNIArgs, iface string, pluginInfo utils.PluginInfo) (*libcni.RuntimeConf, error) {
 	k8sArgs, err := loadArgs(cniArgs)
 	if err != nil {
 		return nil, err
@@ -747,6 +754,9 @@ func runtimeConf(cniArgs utils.CNIArgs, iface string) (*libcni.RuntimeConf, erro
 	}
 	if string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID) != "" {
 		args = append(args, [2]string{"K8S_POD_INFRA_CONTAINER_ID", string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID)})
+	}
+	if pluginInfo.Vlan != "" {
+		args = append(args, [2]string{"VLAN", pluginInfo.Vlan})
 	}
 
 	return &libcni.RuntimeConf{

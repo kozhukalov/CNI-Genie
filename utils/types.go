@@ -175,4 +175,5 @@ type PluginInfo struct {
 	IfName     string
 	Subnet     string
 	Refer_nic  string
+	Vlan       string
 }
