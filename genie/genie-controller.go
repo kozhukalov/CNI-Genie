@@ -313,7 +313,10 @@ func delegateAddNetwork(pluginInfo *utils.PluginInfo, cniArgs utils.CNIArgs) (ty
 	if err := os.Unsetenv("CNI_IFNAME"); err != nil {
 		fmt.Fprintf(os.Stderr, "CNI Genie Error while unsetting env variable CNI_IFNAME: %v\n", err)
 	}
-	rtConf, err := runtimeConf(cniArgs, pluginInfo.IfName, pluginInfo.OptionalArgs)
+	if err := os.Unsetenv("CNI_ARGS"); err != nil {
+		fmt.Fprintf(os.Stderr, "CNI Genie Error while unsetting env variable CNI_ARGS: %v\n", err)
+    }
+	rtConf, err := runtimeConf(cniArgs, pluginInfo.IfName, pluginInfo.OptionalArgs, pluginInfo)
 	if err != nil {
 		return nil, fmt.Errorf("Error generating runtime conf: %v", err)
 	}
@@ -356,7 +359,7 @@ func deleteNetwork(pluginElements []*utils.PluginInfo, cniArgs utils.CNIArgs) er
 }
 
 func delegateDelNetwork(pluginInfo *utils.PluginInfo, cniArgs utils.CNIArgs) error {
-	rtConf, err := runtimeConf(cniArgs, pluginInfo.IfName, pluginInfo.OptionalArgs)
+	rtConf, err := runtimeConf(cniArgs, pluginInfo.IfName, pluginInfo.OptionalArgs, pluginInfo)
 	if err != nil {
 		return fmt.Errorf("CNI Genie couldn't convert cniArgs to RuntimeConf: %v", err)
 	}
@@ -496,13 +499,18 @@ func getPluginInfo(plugins []string) ([]*utils.PluginInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if len(plugins) == 1 {
-		plugininfo, err := loadPluginConfig(&files, plugins[0])
+		pluginInfo := utils.PluginInfo{}
+		pluginDefItems := strings.Split(strings.TrimSpace(plugins[0]), ":")
+		pluginInfo.PluginName = pluginDefItems[0]
+		pluginInfo.Config, err = loadPluginConfig(&files, pluginInfo.PluginName)
 		if err != nil {
 			return nil, err
 		}
-		return []*utils.PluginInfo{{PluginName: strings.TrimSpace(plugins[0]), Config: plugininfo}}, nil
+		if len(pluginDefItems) == 2 {
+			pluginInfo.Vlan = pluginDefItems[1]
+		}
+		return []*utils.PluginInfo{&pluginInfo}, nil
 	}
 	return loadPluginInfoList(files, plugins)
 }
@@ -510,12 +518,17 @@ func getPluginInfo(plugins []string) ([]*utils.PluginInfo, error) {
 func loadPluginInfoList(files, plugins []string) ([]*utils.PluginInfo, error) {
 	pluginInfoList := make([]*utils.PluginInfo, len(plugins))
 	pluginMap := make(map[string]map[bool][]int)
+	pluginVlanMap := make(map[string]string, len(plugins))
 	for i := range plugins {
-		plugins[i] = strings.TrimSpace(plugins[i])
-		if pluginMap[plugins[i]] == nil {
-			pluginMap[plugins[i]] = map[bool][]int{false: {i + 1}}
+		pluginDefItems := strings.Split(strings.TrimSpace(plugins[i]), ":")
+		name := pluginDefItems[0]
+		if len(pluginDefItems) == 2 {
+			pluginVlanMap[name] = pluginDefItems[1]
+		}
+		if pluginMap[name] == nil {
+			pluginMap[name] = map[bool][]int{false: {i + 1}}
 		} else {
-			pluginMap[plugins[i]][false] = append(pluginMap[plugins[i]][false], i+1)
+			pluginMap[name][false] = append(pluginMap[name][false], i+1)
 		}
 	}
 	fmt.Fprintf(os.Stderr, "CNI Genie plugion map: %+v\n", pluginMap)
@@ -541,6 +554,7 @@ func loadPluginInfoList(files, plugins []string) ([]*utils.PluginInfo, error) {
 				pluginInfoList[index-1] = &utils.PluginInfo{
 					PluginName: pluginName,
 					Config:     config,
+					Vlan:       pluginVlanMap[pluginName],
 				}
 			}
 			delete(pluginMap, pluginName)
@@ -566,6 +580,7 @@ func loadPluginInfoList(files, plugins []string) ([]*utils.PluginInfo, error) {
 			pluginInfoList[index-1] = &utils.PluginInfo{
 				PluginName: plugin,
 				Config:     config,
+				Vlan:       pluginVlanMap[plugin],
 			}
 		}
 	}
@@ -842,7 +857,7 @@ func getK8sPodAnnotations(client *kubernetes.Clientset, k8sArgs utils.K8sArgs) (
 	return pod.Annotations, nil
 }
 
-func runtimeConf(cniArgs utils.CNIArgs, iface string, optionalArgs map[string]string) (*libcni.RuntimeConf, error) {
+func runtimeConf(cniArgs utils.CNIArgs, iface string, optionalArgs map[string]string, pluginInfo *utils.PluginInfo) (*libcni.RuntimeConf, error) {
 	k8sArgs, err := loadArgs(cniArgs)
 	if err != nil {
 		return nil, err
@@ -860,6 +875,9 @@ func runtimeConf(cniArgs utils.CNIArgs, iface string, optionalArgs map[string]st
 	if string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID) != "" {
 		args = append(args, [2]string{"K8S_POD_INFRA_CONTAINER_ID", string(k8sArgs.K8S_POD_INFRA_CONTAINER_ID)})
 	}
+	if pluginInfo.Vlan != "" {
+		args = append(args, [2]string{"VLAN", pluginInfo.Vlan})
+    }
 
 	for key, value := range optionalArgs {
 		args = append(args, [2]string{key, value})

@@ -160,4 +160,5 @@ type PluginInfo struct {
 	OptionalArgs     map[string]string
 	ValidationParams interface{}
 	ValidateRes      ValidateResult
+	Vlan             string
 }
